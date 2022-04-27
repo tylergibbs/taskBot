@@ -25,10 +25,12 @@ def createControlMsg(name: string, description: string, msg: Message) -> tuple[i
 
     #buttons
     keyboard = [[   
-            InlineKeyboardButton("Close Task", callback_data='1'),
-            InlineKeyboardButton("Finish Task", callback_data='2'),
-            InlineKeyboardButton("Cancel Task", callback_data='3'),
-        ]]
+            TELEGRAM_BUTTON_CLOSE,
+            TELEGRAM_BUTTON_DONE,
+            TELEGRAM_BUTTON_CANCEL,
+        ],
+           [TELEGRAM_BUTTON_ADD_TO]
+        ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     #send control message
@@ -38,7 +40,7 @@ def createControlMsg(name: string, description: string, msg: Message) -> tuple[i
     return sentMsg.message_id, sentMsg.chat.id
 
 
-def createVolunteerMsg(name: string, description: string, size: int, urgency: int, volunteerChat: int, bot: Bot) -> int:
+def createVolunteerMsg(name: string, description: string, size: int, volunteerChat: int, bot: Bot) -> int:
     """creates a message requresing volunteers for a task
     name: string - name of task
     description: string - description of task
@@ -52,16 +54,13 @@ def createVolunteerMsg(name: string, description: string, size: int, urgency: in
 
     #accsept button
     keyboard = [[  
-            InlineKeyboardButton("Accsept Task", callback_data='4'),
+            TELEGRAM_BUTTON_ACCSEPT
         ]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     #construct message
     msg = TELEGRAM_MSG_VOL.format(name,description)
-    if size < 1000:
-       msg+= TELEGRAM_MSG_SIZE.format(size)
-    for i in range(urgency):
-        msg += TELEGRAM_MSG_URG
+    msg+= TELEGRAM_MSG_SIZE.format(size)
 
     #send volunteer message
     sentMsg = bot.sendMessage(chat_id=volunteerChat, text=msg,
@@ -80,6 +79,18 @@ def setUpNewChannel(name: string, description: string, channelId: int, bot: Bot)
     bot.sendMessage(channelId, TELEGRAM_MSG_NEW_TASK_CHAT.format(name, description), parse_mode=ParseMode.MARKDOWN)
 
 
+def addAssignerToGroup(name: str, telegramId: int, channel: int, bot: Bot) -> None:
+    """issues an invite to the channel
+    person: string - name of person to invite
+    channel: int - chat id to send invite to
+    bot: Bot - bot to send invite 
+    """
+    #inform group of new member
+    msg = bot.sendMessage(channel, TELEGRAM_MSG_ASSIGNER.format(name))
+    #send invite
+    bot.sendMessage(telegramId, msg.chat.create_invite_link().invite_link)
+
+
 def addPersonToGroup(name: str, telegramId: int, channel: int, bot: Bot) -> None:
     """issues an invite to the volunteer to the channel
     person: string - name of person to invite
@@ -91,7 +102,7 @@ def addPersonToGroup(name: str, telegramId: int, channel: int, bot: Bot) -> None
     #send invite
     bot.sendMessage(telegramId, msg.chat.create_invite_link().invite_link)
 
-def invalidTask(msg: Message) -> None:
+def invalidTask(msg: string, message: Message) -> None:
     """reply to an invalid task request with error message
     msg: Message -  incorect task request to be replied to
     """
@@ -157,9 +168,9 @@ def closeTaskMsg(volunteerMsgId: int, volunteerChatId: int, query: CallbackQuery
     """
     #edits control message and removes close button
     keyboard = [[
-            InlineKeyboardButton("Finish Task", callback_data='2'),
-            InlineKeyboardButton("Cancel Task", callback_data='3'),
-        ]]
+           TELEGRAM_BUTTON_DONE,
+           TELEGRAM_BUTTON_CANCEL  
+      ],[TELEGRAM_BUTTON_ADD_TO]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     query.edit_message_text(text=query.message.text + TELEGRAM_MSG_APPEND_CLOSED, reply_markup = reply_markup)
     

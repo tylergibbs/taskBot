@@ -2,6 +2,7 @@ from pyairtable import Table
 from pyairtable.formulas import match
 from bot_config import *
 import string
+from bot_logging import *
 
 taskTable = 		Table(API_KEY, SYSTEM_BASE_ID, 	  TASKS)
 channelTable = 		Table(API_KEY, AUTOMATION_BASE_ID, AUTOCHANNELS)
@@ -19,18 +20,17 @@ def registerUser(text: string, usrId: int) -> string:
     
     #get the entry of the volunteer with the name ubove
     #TODO throw error if multibe people with name?
-    record = peopleTable.first(formula = match({'Name (all)':name}))
+    record = peopleTable.first(formula = match({AIRTABLE_FIELD_PEOPLE_NAME:name}))
 
     #if a volunteer is found add the telegram id to them
     if record:
-       fields = {"Telegram Id" : usrId,
-                 "Telegram Channel Id": usrId,
-                 "Has Telegram": True}
+       fields = {AIRTABLE_FIELD_PEOPLE_TELEGRAM : usrId,
+                 AIRTABLE_FIELD_PEOPLE_HAS_TELEGRAM : True}
        peopleTable.update(record['id'], fields)
        #TODO move strings to config file
-       return "Telegram succsesfuly registered"
+       return TELEGRAM_MSG_REGISTER_GOOD
     else:
-       return "You dont exist\nMore likely the name entered does not match our records"
+       return TELEGRAM_MSG_REGISTER_BAD
 
 def assignNewChannel() -> dict:
     """gets the airtable entry of the next open channel
@@ -40,22 +40,23 @@ def assignNewChannel() -> dict:
     channel = channelTable.first(formula=match({'Uses':'Tasks','In Use':False}))
     if(channel):
        #mark channel as in use
-       newChannelProj = channelTableProj.first(formula=match({'Key':channel['fields']['Key']}))
-       channelTable.update(channel['id'], {"In Use":True})
+       newChannelProj = channelTableProj.first(formula=match({
+                        AIRTABLE_FIELD_TASKS_CHANNEL_ID:channel['fields'][AIRTABLE_FIELD_CHANNEL_ID]}))
+       channelTable.update(channel['id'], {AIRTABLE_FIELD_CHANNEL_USED:True})
        return newChannelProj
     else:
        #TODO proper error handeling
-       raise "all channels in use"
+       raise TELEGRAM_MSG_ALL_CHANNELS
 
 def unassignChannel(channelKey: int) -> None:
     """mark channel as free
     channelKey: int - the id of the channel to mark as free
     """
     channel = channelTable.first(formula=match({'Key':channelKey,'Uses':'Tasks','In Use':True}))
-    channelTable.update(channel['id'], {"In Use":False})
+    channelTable.update(channel['id'], {AIRTABLE_FIELD_CHANNEL_USED:False})
 
 
-def createTaskEntry(name: string, description: string, urgency: int, size: int, assigner: int, taskChannel: string,
+def createTaskEntry(name: string, description: string, size: int, assigner: int, taskChannel: string,
                     volunteerMsg: int, assignerMsgId: int, assignerChatId: int) -> None:
     """creates a new task entry in airtable from the avalible information
     name: string - name of task
@@ -69,13 +70,15 @@ def createTaskEntry(name: string, description: string, urgency: int, size: int, 
     assignerChatId: int - id of the chat the control message is in
     """
 
-    taskTable.create({"Name": name, "Description":description, "Assigned By": [assigner],
-                      "Status": "Open",
-                      "Task Channel": [taskChannel],
-                      "Ask Msg Id": volunteerMsg,
-                      "Control Msg Id": assignerMsgId,
-                      "Control Msg Channel": assignerChatId,
-                      "Urgency": urgency, "Max People": size})
+    taskTable.create({AIRTABLE_FIELD_TASK_NAME: name, 
+                      AIRTABLE_FIELD_TASKS_DESCRIPTION:description, 
+                      AIRTABLE_FIELD_TASKS_ASSIGNER: [assigner],
+                      AIRTABLE_FIELD_TASKS_STATUS: "Open",
+                      AIRTABLE_FIELD_TASKS_CHANNEL: [taskChannel],
+                      AIRTABLE_FIELD_TASKS_VOLUNTEER_MESSAGE: volunteerMsg,
+                      AIRTABLE_FIELD_TASKS_CONTROL_MESSAGE: assignerMsgId,
+                      AIRTABLE_FIELD_TASKS_CONTROL_MESSAGE_CHANNEL: assignerChatId,
+                      AIRTABLE_FIELD_TASKS_SIZE: size})
 
 def updateTask(status: string, msgId: int)-> dict:
     """updates the status of a task to the given status, if
@@ -90,11 +93,11 @@ def updateTask(status: string, msgId: int)-> dict:
     task = getTaskFromControl(msgId)
     
     #build dictionary with fields to update
-    newFields = {"Status":status}
+    newFields = {AIRTABLE_FIELD_TASKS_STATUS:status}
     #if task is over remove all volunteers and unassin the channel
     if status != "Closed":
-       newFields["Assigned To"]=[]
-       newFields["Task Channel"]=[]
+       newFields[AIRTABLE_FIELD_TASKS_VOLUNTEERS]=[]
+       newFields[AIRTABLE_FIELD_TASKS_CHANNEL]=[]
     
     #update the airtable entry with newFields
     taskTable.update(task['id'], newFields)
@@ -115,17 +118,27 @@ def addPersonToTask(msgId:int, telegramId:int) ->  tuple[dict, dict]:
     usr = getVolunteer(telegramId)
 
     #gets the task associated with the volunteer message that generated query
+    print(str(msgId))
+    print(str(msgId))
+    print(str(msgId))
+    print(str(msgId))
+    print(str(msgId))
     task = getTaskFromVolMsg(msgId)
 
     #verify task is open
-    if task['fields']['Status'] == 'Open':
+    print(str(task))
+    print(str(task))
+    print(str(task))
+    print(str(task))
+    print(str(task))
+    if task['fields'][AIRTABLE_FIELD_TASKS_STATUS] == 'Open':
        #verify user is registerred
        if usr:
           assignedTo = []
           
           #if task has any already assigned to it keep them
           if("Assigned To" in task['fields']):
-             assignedTo.extend(task['fields']["Assigned To"])
+             assignedTo.extend(task['fields'][AIRTABLE_FIELD_TASKS_VOLUNTEERS])
 
           #if user is already assigned to task do nothing
           if(not (usr["id"] in assignedTo)):
@@ -135,26 +148,26 @@ def addPersonToTask(msgId:int, telegramId:int) ->  tuple[dict, dict]:
 
              return usr, task
           else:
-             return None, task
+             return usr, task
        else:
-          return None, task
+          return None, Task
     else:
        logging.warn(LOG_TASK_CLOSED_WARN)
        return None, None
 
 def getVolunteer(telegram_id: int) -> dict:
-    return peopleTable.first(formula=match({"Telegram Id":telegram_id}))
+    return peopleTable.first(formula=match({AIRTABLE_FIELD_PEOPLE_TELEGRAM:telegram_id}))
 
 def getTaskFromControl(msgId: int) -> dict:
-    return taskTable.first(formula=match({"Control Msg Id":msgId}))
+    return taskTable.first(formula=match({AIRTABLE_FIELD_TASKS_CONTROL_MESSAGE:msgId}))
 
 def getTaskFromVolMsg(msgId: int) -> dict:
-    return taskTable.first(formula=match({"Ask Msg Id":msgId}))
+    return taskTable.first(formula=match({AIRTABLE_FIELD_TASKS_VOLUNTEER_MESSAGE:msgId}))
 
 def getTaskByChat(chatId: int) -> dict:
-    return taskTable.first(formula=match({"Key":chatId}))
+    return taskTable.first(formula=match({AIRTABLE_FIELD_TASKS_CHANNEL_ID:chatId}))
 
 def getVolunteerChat() -> int:
-    return channelTable.first(formula=match({"Uses":"Volunteer"}))['fields']['Key']
+    return channelTable.first(formula=match({AIRTABLE_FIELD_CHANNEL_USES:"Volunteer"}))['fields'][AIRTABLE_FIELD_CHANNEL_ID]
 
 

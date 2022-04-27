@@ -12,83 +12,58 @@ from telegram.ext import (
 from bot_airtable import *
 from bot_telegram import *
 from bot_config import *
+import bot_config
 from bot_logging import logging
 
 #TODO migrate strings to config file are rething invalid task wording
 def newTask(update: Update, context: CallbackContext) -> None:
-    """handles call to create a new task with /newTask|name|desc|?addTo|?urgency|?max size
+    """handles call to create a new task with /newTask [name] [size] [task description]
     update must have a message
     context is discarded
     """
+    message = update.message
     #verify the message comes from a direct message
     if (0>update.message.chat.id):
-       invalidTask("/newTasks must be called from a direct message to the bot", update, context); 
+       invalidTask(TELEGRAM_MSG_INVALID_TASK_CHAT, message); 
     else:
        #Parse message string into variables
-       msg = update.message.text
-       args = msg.split("|")
+       msg = message.text
+       args = msg.split(" ")
 
-       #verify string has required args
-       if(len(args) < 2):
-            invalidTask("Invalid Syntax /newTask|name|desc|?addTo|?urgency|?max size", update, context); 
+       if len(args) < 4:
+          invalidTask(TELEGRAM_MSG_INVALID_TASK_SYNTAX, message)
+          return
+
+       name = args[1]
+
+       size = args[2]
+       if(size.isdigit()):
+          size = int(size)
        else:
-         name = args[1]
-         description = args[2]
+          invalidTask(TELEGRAM_MSG_INVALID_TASK_SIZE, message)
+          return
 
-         #initialize default values of optional args
-         addToGroup = False
-         urgency = 0
-         size = 1000
+       description = " ".join(args[3:])
+       
+       msg = update.message
+       bot = msg.bot
+       usr = getVolunteer(msg.from_user.id)
+       volunteerChat = getVolunteerChat()
+       #verify user exists in database
 
-         #assign optional args if pressent
-         if (len(args) > 3):
-           #arg3 is case insensitive
-           addToGroup = args[3].lower()
-           if addToGroup in ('true','t'):
-               addToGroup = True
-           elif addToGroup in ('false','f'):
-               addToGroup = False
-           else:
-               invalidTask("addToGroup value must be true or t or false or f", update, context)
-               return
-           if (len(args) > 4):
-             urgency = args[4]
-             if (urgency in ['0', '1','2','3','4']):
-                urgency = int(urgency)
-             else:
-                invalidTask("urgency must be 0-4", update, context)
-                return
-             if(len(args) > 5):
-               size = args[5]
-               if (size.isdigit()):
-                 size = int(size)
-               else:
-                 invalidTask("max size must be an integer", update, context)
-                 return
-         #actualy create the task
-         msg = update.message
-         bot = msg.bot
-         usr = getVolunteer(msg.from_user.id)
-         volunteerChat = getVolunteerChat()
-         #verify user exists in database
-         #TODO some way to verify if user can assign tasks
-         if (usr):
-
+       #TODO some way to verify if user can assign tasks
+       if (usr):
             #telegram updates for task
-            volunteerMsgId = createVolunteerMsg(name, description, size, urgency, volunteerChat, bot)
+            volunteerMsgId = createVolunteerMsg(name, description, size, volunteerChat, bot)
             controlMsgId, controlChatId = createControlMsg(name, description, msg)
             channel = assignNewChannel()
-            setUpNewChannel(name, description, channel['fields']['Key'], bot)
-
-            #add the assigner to the task group chat if flag set
-            if(addToGroup):
-               addPersonToGroup(usr['fields']['Telegram Channel Id'], channel['fields']['Key'], bot)
+            setUpNewChannel(name, description, channel['fields'][AIRTABLE_FIELD_TASKS_CHANNEL_ID], bot)
 
             #create airtable row
-            createTaskEntry(name, description, urgency, size, usr['id'], channel['id'],
+            createTaskEntry(name, description, size, usr['id'], channel['id'],
                             volunteerMsgId, controlMsgId, controlChatId)
-         else:
-            invalidTask("You are not registered to create Tasks", update, context);
+       else:
+            invalidTask(TELEGRAM_MSG_INVALID_TASK_USER, message);
 
 
 def button(update: Update, context: CallbackContext) -> None:
@@ -105,14 +80,16 @@ def button(update: Update, context: CallbackContext) -> None:
     #TODO change numbers to more descriptive strings
     data = query.data
     match data:
-        case '1':
+        case bot_config.TELEGRAM_MARKUP_CLOSE:
            closeTask(query)
-        case '2':
+        case bot_config.TELEGRAM_MARKUP_DONE:
            finishTask(query)
-        case '3':
+        case bot_config.TELEGRAM_MARKUP_CANCEL:
            cancelTask(query)
-        case '4':
+        case bot_config.TELEGRAM_MARKUP_ACCSEPT:
            acceptTask(query)
+        case bot_config.TELEGRAM_MARKUP_ADD_TO:
+           addToChannel(query)
 
 def closeTask(query: CallbackQuery) -> None:
     """chages the airtable task status to closed,
@@ -120,7 +97,8 @@ def closeTask(query: CallbackQuery) -> None:
     and removes the accsept task button from the volunteerMessage
     """
     task = updateTask('Closed', query.message.message_id)
-    closeTaskMsg(task['fields']['Ask Msg Id'], getVolunteerChat(), query)
+    closeTaskMsg(task['fields'][AIRTABLE_FIELD_TASKS_VOLUNTEER_MESSAGE],
+                 getVolunteerChat(), query)
 
 def finishTask(query: CallbackQuery) -> None:
     """chages the airtable task status to finished,
@@ -130,13 +108,13 @@ def finishTask(query: CallbackQuery) -> None:
     """
     task = updateTask('Done', query.message.message_id)
 
-    key = task['fields']['Key'][0]
+    key = task['fields'][AIRTABLE_FIELD_TASKS_CHANNEL_ID][0]
     members = []
     if 'Assigned To Telegram Channel' in task['fields']:
-       members.extend(task['fields']['Assigned To Telegram Channel'])
-    members.append(task['fields']['Assigned By Telegram'][0])
+       members.extend(task['fields'][AIRTABLE_FIELD_TASKS_VOLUNTEER_TELEGRAMS])
+    members.append(task['fields'][AIRTABLE_FIELD_TASKS_ASSIGNER_TELEGRAM][0])
 
-    finishTaskMsg(task['fields']['Ask Msg Id'], getVolunteerChat(), query)
+    finishTaskMsg(task['fields'][AIRTABLE_FIELD_TASKS_VOLUNTEER_MESSAGE], getVolunteerChat(), query)
     clearChat(key, members, query.bot)
     unassignChannel(key)
 
@@ -148,13 +126,13 @@ def cancelTask(query: CallbackQuery) -> None:
     """
     task = updateTask('Cancelled', query.message.message_id)
 
-    key = task['fields']['Key'][0]
+    key = task['fields'][AIRTABLE_FIELD_TASKS_CHANNEL_ID][0]
     members = []
-    if 'Assigned To Telegram Channel' in task['fields']:
+    if AIRTABLE_FIELD_TASKS_VOLUNTEER_TELEGRAMS in task['fields']:
        members.extend(task['fields']['Assigned To Telegram Channel'])
-    members.append(task['fields']['Assigned By Telegram'][0])
+    members.append(task['fields'][AIRTABLE_FIELD_TASKS_ASSIGNER_TELEGRAM][0])
 
-    cancelTaskMsg(task['fields']['Ask Msg Id'], getVolunteerChat(), query)
+    cancelTaskMsg(task['fields'][AIRTABLE_FIELD_TASKS_VOLUNTEER_MESSAGE], getVolunteerChat(), query)
     clearChat(key, members, query.bot)
     unassignChannel(key)
 
@@ -166,11 +144,29 @@ def acceptTask(query: CallbackQuery) -> None:
     usr, task = addPersonToTask(query.message.message_id, query.from_user.id)
     if task:
        if usr:
-          acceptTaskMsg(usr['fields']["Name (all)"], usr['fields']['Telegram Channel Id'], task['fields']['Key'][0], query)
+          print(usr['fields'])
+          print(usr['fields'])
+          print(usr['fields'])
+          print(usr['fields'])
+          acceptTaskMsg(usr['fields'][AIRTABLE_FIELD_PEOPLE_NAME], 
+                       usr['fields'][AIRTABLE_FIELD_PEOPLE_TELEGRAM], 
+                       task['fields'][AIRTABLE_FIELD_TASKS_CHANNEL_ID][0], query)
        else:
-          query.message.reply_text("last applicant is not registered")
+          query.message.reply_text(TELEGRAM_MSG_USR_NOT_REGISTERED)
     else:
-       query.message.reply_text("task is closed")
+       query.message.reply_text(TELEGRAM_MSG_TASK_CLOSED)
+
+def addToChannel(query: CallbackQuery) -> None:
+    """adds the user to to the group associated with the controll message
+    query: CallbackQuery - a click on a controll message
+    """
+
+    #TODO remove/track button when button is clicked
+    volunteer = getVolunteer(query.from_user.id)
+    task = getTaskFromControl(query.message.message_id)
+    addAssignerToGroup(volunteer['fields'][AIRTABLE_FIELD_PEOPLE_NAME],
+             volunteer['fields'][AIRTABLE_FIELD_PEOPLE_TELEGRAM],
+             task['fields'][AIRTABLE_FIELD_TASKS_CHANNEL_ID][0], query.bot)
 
 def ask(update: Update, context: CallbackContext) -> None:
     """called from within a task chat
@@ -183,8 +179,9 @@ def ask(update: Update, context: CallbackContext) -> None:
     msg = update.message
     task = getTaskByChat(msg.chat.id)
     if task:
-        msgAssigner(TELEGRAM_MSG_FWD_ASK, task['fields']['Name'], 
-                    task['fields']['Key'][0], task['fields']['Assigned By Telegram'][0], msg)
+        msgAssigner(TELEGRAM_MSG_FWD_ASK, task['fields'][AIRTABLE_FIELD_TASK_NAME], 
+                    task['fields'][AIRTABLE_FIELD_TASKS_CHANNEL_ID][0], 
+                    task['fields']['Assigned By Telegram'][0], msg)
 
 def finish(update: Update, context: CallbackContext) -> None:
     """called from within a task chat
@@ -221,9 +218,6 @@ def helpCommand(update: Update, context: CallbackContext) -> None:
     sendHelpMsg(update.message)
 
 def main() -> None:
-    #TODO use WebHooks
-    """Run the bot."""
-    # Create the Updater and pass it your bot's token.
     updater = Updater(TELEGRAM_TOKEN)
 
     # Get the dispatcher to register handlers
@@ -247,6 +241,27 @@ def main() -> None:
     # SIGTERM or SIGABRT. This should be used most of the time, since
     # start_polling() is non-blocking and will stop the bot gracefully.
     updater.idle()
+
+def setup():
+    bot = Bot(TELEGRAM_TOKEN)
+
+    dispatcher = Dispatcher(bot, None, workers=0)
+    dispatcher.add_handler(CommandHandler("newTask", newTask))
+    dispatcher.add_handler(CommandHandler("help", helpCommand))
+    dispatcher.add_handler(CommandHandler("register", register))
+    dispatcher.add_handler(CommandHandler("finish", finish))
+    dispatcher.add_handler(CommandHandler("ask", ask))
+    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, respond))
+    dispatcher.add_handler(CommandHandler("chatId", chatId))
+    dispatcher.add_handler(CallbackQueryHandler(button))
+    
+    return dispatcher
+
+dispatcher = setup()
+
+def webhook(update):
+    dispatcher.process_update(update)
+
 
 
 if __name__ == '__main__':
