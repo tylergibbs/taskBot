@@ -6,7 +6,8 @@ from telegram.ext import (
    MessageHandler,
    Filters,
    CallbackContext,
-   CallbackQueryHandler
+   CallbackQueryHandler,
+   Dispatcher
 )
 
 from bot_airtable import *
